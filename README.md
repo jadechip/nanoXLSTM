@@ -2,7 +2,7 @@
 
 ![nanoGPT](assets/nanogpt.jpg)
 
-nanoXLSTM is a minimal codebase for playing around with language models based on the xLSTM (extended Long Short-Term Memory) architecture from the awesome research paper: xLSTM: Extended Long Short-Term Memory and heavily inspired by Andrej Karpathy's [minGPT](https://github.com/karpathy/minGPT).
+nanoXLSTM is a minimal codebase for playing around with language models based on the xLSTM (extended Long Short-Term Memory) architecture from the awesome research paper: xLSTM: Extended Long Short-Term Memory and heavily inspired by Andrej Karpathy's [nanoGPT](https://github.com/karpathy/nanoGPT).
 
 ![repro124m](assets/xlstm_loss.png)
 
