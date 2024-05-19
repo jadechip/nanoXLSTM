@@ -45,7 +45,7 @@ class sLSTM(nn.Module):
         hidden_state = self.o_proj(hidden_state)
         hidden_state = self.dropout(hidden_state)
 
-        return hidden_state
+        return x, hidden_state
 
 class mLSTM(nn.Module):
     def __init__(self, config):
