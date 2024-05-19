@@ -1,12 +1,3 @@
-"""
-Full definition of a GPT Language Model, all of it in this single file.
-References:
-1) the official GPT-2 TensorFlow implementation released by OpenAI:
-https://github.com/openai/gpt-2/blob/master/src/model.py
-2) huggingface/transformers PyTorch implementation:
-https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
-"""
-
 import math
 import inspect
 from dataclasses import dataclass
@@ -14,10 +5,9 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from torch.optim.lr_scheduler import OneCycleLR
 
 class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
-
     def __init__(self, ndim, bias):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
@@ -32,33 +22,28 @@ class sLSTM(nn.Module):
         self.W = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.U = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.o_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.f_bias = nn.Parameter(torch.ones(config.n_embd))
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x, hidden_states):
         batch_size, seq_len, _ = x.size()
 
-        # Compute the input and recurrent pre-activations
         Z = self.W(x) + self.U(hidden_states)
-
-        # Split into i, f, c, o gates
         i, f, c, o = Z.chunk(4, dim=-1)
 
-        # Apply exponential activations for input and forget gates
         i = torch.exp(i)
-        f = torch.exp(f)
+        f = torch.exp(f + self.f_bias)
 
-        # Compute cell state and normalizer state
         cell_state = f * hidden_states + i * torch.tanh(c)
         normalizer_state = f + i
 
-        # Stabilize and normalize cell state
         cell_state = cell_state / normalizer_state
 
-        # Compute output gate and hidden state
         o = torch.sigmoid(o)
         hidden_state = o * torch.tanh(cell_state)
 
-        # Apply output projection
         hidden_state = self.o_proj(hidden_state)
+        hidden_state = self.dropout(hidden_state)
 
         return hidden_state
 
@@ -71,6 +56,8 @@ class mLSTM(nn.Module):
         self.W_f = nn.Linear(config.n_embd, config.n_embd)
         self.W_i = nn.Linear(config.n_embd, config.n_embd)
         self.o_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.f_bias = nn.Parameter(torch.ones(config.n_embd))
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         batch_size, seq_len, _ = x.size()
@@ -79,40 +66,38 @@ class mLSTM(nn.Module):
         k = self.W_k(x)
         v = self.W_v(x)
 
-        f = torch.sigmoid(self.W_f(x))
+        f = torch.sigmoid(self.W_f(x) + self.f_bias)
         i = torch.exp(self.W_i(x))
 
-        # Compute memory matrix
         memory = torch.softmax(torch.matmul(q, k.transpose(1, 2)) / math.sqrt(k.size(-1)), dim=-1)
         memory = torch.matmul(memory, v)
 
-        # Update memory matrix
         memory = f * memory + i * v
 
-        # Compute normalizer state
         normalizer = f + i
 
-        # Stabilize and normalize memory
         memory = memory / normalizer
 
-        # Apply output projection
         out = self.o_proj(memory)
+        out = self.dropout(out)
 
         return out
 
 class xLSTMBlock(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, ratio_mLSTM=0.5):
         super().__init__()
-        self.ln1 = nn.LayerNorm(config.n_embd)
-        self.slstm = sLSTM(config)
-        self.mlstm = mLSTM(config)
-        self.ln2 = nn.LayerNorm(config.n_embd)
-        self.mlp = MLP(config)
+        self.num_sLSTM = int(config.n_layer * (1 - ratio_mLSTM))
+        self.num_mLSTM = config.n_layer - self.num_sLSTM
+        self.sLSTM_blocks = nn.ModuleList([sLSTM(config) for _ in range(self.num_sLSTM)])
+        self.mLSTM_blocks = nn.ModuleList([mLSTM(config) for _ in range(self.num_mLSTM)])
+        self.ln_s = nn.LayerNorm(config.n_embd)
+        self.ln_m = nn.LayerNorm(config.n_embd)
 
     def forward(self, x, hidden_states):
-        x = x + self.slstm(self.ln1(x), hidden_states)
-        x = x + self.mlstm(self.ln2(x))
-        x = x + self.mlp(x)
+        for i in range(self.num_sLSTM):
+            x, hidden_states = self.sLSTM_blocks[i](self.ln_s(x), hidden_states)
+        for i in range(self.num_mLSTM):
+            x = self.mLSTM_blocks[i](self.ln_m(x))
         return x, hidden_states
 
 class MLP(nn.Module):
@@ -152,7 +137,6 @@ class GPT(nn.Module):
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-        # Initialize weights
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -169,7 +153,6 @@ class GPT(nn.Module):
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device).unsqueeze(0)
 
-        # Forward the GPT model itself
         token_embeddings = self.embedding(idx)
         position_embeddings = self.pos_embedding(pos)
         x = self.drop(token_embeddings + position_embeddings)
@@ -189,12 +172,6 @@ class GPT(nn.Module):
         return logits, loss
 
     def get_num_params(self, non_embedding=True):
-        """
-        Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
-        """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
             n_params -= self.pos_embedding.weight.numel()
@@ -252,7 +229,8 @@ class GPT(nn.Module):
 
         return model
 
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+
+    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type, max_iters):
         param_dict = {pn: p for pn, p in self.named_parameters()}
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
         decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
@@ -261,17 +239,9 @@ class GPT(nn.Module):
             {'params': decay_params, 'weight_decay': weight_decay},
             {'params': nodecay_params, 'weight_decay': 0.0}
         ]
-        num_decay_params = sum(p.numel() for p in decay_params)
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == 'cuda'
-        extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
-        print(f"using fused AdamW: {use_fused}")
-
-        return optimizer
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+        scheduler = OneCycleLR(optimizer, max_lr=learning_rate, total_steps=max_iters, pct_start=0.05)
+        return optimizer, scheduler
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
         N = self.get_num_params()

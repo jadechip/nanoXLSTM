@@ -196,7 +196,10 @@ model.to(device)
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
-optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+optimizer, scheduler = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type, max_iters)
+if init_from == 'resume':
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    scheduler.load_state_dict(checkpoint['scheduler'])
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None # free up memory
@@ -226,6 +229,7 @@ def estimate_loss():
         out[split] = losses.mean()
     model.train()
     return out
+
 
 # learning rate decay scheduler (cosine with warmup)
 def get_lr(it):
@@ -268,7 +272,7 @@ while True:
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
-                "lr": lr,
+                "lr": scheduler.get_last_lr()[0],
                 "mfu": running_mfu*100, # convert to percentage
             })
         if losses['val'] < best_val_loss or always_save_checkpoint:
@@ -277,6 +281,7 @@ while True:
                 checkpoint = {
                     'model': raw_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
                     'model_args': model_args,
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
@@ -310,6 +315,7 @@ while True:
     # step the optimizer and scaler if training in fp16
     scaler.step(optimizer)
     scaler.update()
+    scheduler.step()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
