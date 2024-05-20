@@ -22,7 +22,7 @@ class sLSTM(nn.Module):
         self.W = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.U = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.o_proj = nn.Linear(config.n_embd, config.n_embd)
-        self.f_bias = nn.Parameter(torch.ones(config.n_embd))
+        self.f_bias = nn.Parameter(torch.zeros(config.n_embd).fill_(3.0))  # Initialize with values between 3 and 6
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x, hidden_states):
@@ -31,8 +31,10 @@ class sLSTM(nn.Module):
         Z = self.W(x) + self.U(hidden_states)
         i, f, c, o = Z.chunk(4, dim=-1)
 
-        i = torch.exp(i)
-        f = torch.exp(f + self.f_bias)
+        # Stabilization technique to avoid overflow
+        stab_factor = torch.max(torch.max(i), torch.max(f))
+        i = torch.exp(i - stab_factor)
+        f = torch.exp(f + self.f_bias - stab_factor)
 
         cell_state = f * hidden_states + i * torch.tanh(c)
         normalizer_state = f + i

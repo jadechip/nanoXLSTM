@@ -50,6 +50,11 @@ python sample.py --out_dir=out-shakespeare-char
 - [x] `GPT` class: The `xLSTM_blocks` are used in the `GPT` class instead of separate `sLSTM` and `mLSTM` blocks.
 - [x] `configure_optimizers` method: The `configure_optimizers` method in the `GPT` class is updated to use AdamW optimizer and OneCycleLR scheduler.
 
+20/05/24
+
+- [x] Initialize the forget gate bias (self.f_bias) with values between 3 and 6 instead of ones. This helps the forget gate to be effective from the beginning of training.
+- [x] Introduce a stabilization technique to avoid overflow due to the exponential function. You can use the max function to compute a stabilization factor and subtract it from the input gate and forget gate activations before applying the exponential function.
+
 ## Training script changes:
 
 - [x] Import statement: The OneCycleLR scheduler is imported.
