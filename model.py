@@ -58,7 +58,7 @@ class mLSTM(nn.Module):
         self.W_f = nn.Linear(config.n_embd, config.n_embd)
         self.W_i = nn.Linear(config.n_embd, config.n_embd)
         self.o_proj = nn.Linear(config.n_embd, config.n_embd)
-        self.f_bias = nn.Parameter(torch.ones(config.n_embd))
+        self.f_bias = nn.Parameter(torch.zeros(config.n_embd).fill_(3.0))
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
