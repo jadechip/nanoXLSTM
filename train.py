@@ -23,11 +23,35 @@ import pickle
 from contextlib import nullcontext
 
 import numpy as np
+
 import torch
+from torch.utils.data import Dataset, DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
+
+
+class MyDataset(Dataset):
+    def __init__(self, data_dir, split, block_size):
+        self.block_size = block_size
+        if split == 'train':
+            data_path = os.path.join(data_dir, 'train.bin')
+        else:
+            data_path = os.path.join(data_dir, 'val.bin')
+
+        # Load the data into memory
+        self.data = np.memmap(data_path, dtype=np.uint16, mode='r')
+
+    def __len__(self):
+        return len(self.data) - self.block_size
+
+    def __getitem__(self, idx):
+        start_idx = idx
+        end_idx = start_idx + self.block_size
+        x = torch.from_numpy((self.data[start_idx:end_idx]).astype(np.int64))
+        y = torch.from_numpy((self.data[start_idx+1:end_idx+1]).astype(np.int64))
+        return x, y
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -130,6 +154,17 @@ def get_batch(split):
         x, y = x.to(device), y.to(device)
     return x, y
 
+
+def get_batch_2(split):
+    dataset = MyDataset(data_dir, split, block_size)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True if split == 'train' else False)
+    for x, y in data_loader:
+        if device_type == 'cuda':
+            x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+        else:
+            x, y = x.to(device), y.to(device)
+        yield x, y
+
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 best_val_loss = 1e9
@@ -222,7 +257,8 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split)
+            batch_iter = get_batch_2(split)
+            X, Y = next(batch_iter)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
@@ -251,7 +287,10 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 # training loop
-X, Y = get_batch('train') # fetch the very first batch
+train_iter = get_batch_2('train')
+X, Y = next(train_iter)
+print("the x", X)
+print("the y", Y)
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
@@ -305,7 +344,7 @@ while True:
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch('train')
+        X, Y = next(train_iter)
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient

@@ -133,7 +133,6 @@ class GPT(nn.Module):
         self.config = config
 
         self.embedding = nn.Embedding(config.vocab_size, config.n_embd)
-        self.pos_embedding = nn.Embedding(config.block_size, config.n_embd)
         self.drop = nn.Dropout(config.dropout)
         self.xLSTM_blocks = nn.ModuleList([xLSTMBlock(config) for _ in range(config.n_layer)])
         self.ln_f = nn.LayerNorm(config.n_embd)
@@ -153,11 +152,8 @@ class GPT(nn.Module):
     def forward(self, idx, targets=None):
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device).unsqueeze(0)
-
-        token_embeddings = self.embedding(idx)
-        position_embeddings = self.pos_embedding(pos)
-        x = self.drop(token_embeddings + position_embeddings)
+        token_embeddings = self.embedding(idx)  # Add this line to initialize token_embeddings
+        x = self.drop(token_embeddings)
 
         hidden_states = torch.zeros_like(x)
         for block in self.xLSTM_blocks:
@@ -175,14 +171,11 @@ class GPT(nn.Module):
 
     def get_num_params(self, non_embedding=True):
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
-            n_params -= self.pos_embedding.weight.numel()
         return n_params
 
     def crop_block_size(self, block_size):
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
 
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
