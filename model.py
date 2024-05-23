@@ -143,12 +143,9 @@ class GPT(nn.Module):
 
   def _init_weights(self, module):
     if isinstance(module, (nn.Linear, nn.Embedding)):
-      torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+      nn.init.xavier_uniform_(module.weight)
       if isinstance(module, nn.Linear) and module.bias is not None:
-        torch.nn.init.zeros_(module.bias)
-    elif isinstance(module, nn.LayerNorm):
-      torch.nn.init.zeros_(module.bias)
-      torch.nn.init.ones_(module.weight)
+        nn.init.zeros_(module.bias)
 
   def forward(self, idx, targets=None):
     b, t = idx.size()
