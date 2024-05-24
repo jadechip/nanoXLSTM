@@ -105,12 +105,14 @@ class xLSTMBlock(nn.Module):
         self.mLSTM_blocks = nn.ModuleList([mLSTM(config) for _ in range(self.num_mLSTM)])
 
     def forward(self, x, hidden_states):
+        residual = x
         for i in range(self.num_sLSTM):
             x, hidden_states = self.sLSTM_blocks[i](x, hidden_states)
             if DEBUG_MODE: print(f"xLSTMBlock - After sLSTM {i}: x: {x.shape}, hidden_states: {hidden_states.shape}")
         for i in range(self.num_mLSTM):
             x = self.mLSTM_blocks[i](x)
             if DEBUG_MODE: print(f"xLSTMBlock - After mLSTM {i}: x: {x.shape}")
+        x = x + residual
         return x, hidden_states
 
 class MLP(nn.Module):
@@ -165,12 +167,14 @@ class GPT(nn.Module):
         token_embeddings = self.embedding(idx)
         if DEBUG_MODE: print(f"GPT - token_embeddings: {token_embeddings.shape}")
 
+        # apply dropout
         x = self.drop(token_embeddings)
         if DEBUG_MODE: print(f"GPT - x after dropout: {x.shape}")
 
         hidden_states = [torch.zeros_like(x)] * self.config.n_layer
         for i, (block, hidden_state) in enumerate(zip(self.xLSTM_blocks, hidden_states)):
             x, hidden_state = block(x, hidden_state)
+            x = x + token_embeddings  # Add residual connection
             if DEBUG_MODE: print(f"GPT - After xLSTMBlock {i}: x: {x.shape}, hidden_state: {hidden_state.shape}")
 
         x = self.ln_f(x)
